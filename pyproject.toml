@@ -1,5 +1,5 @@
 [project]
-name = "ml-stopreason"
+name = "mtia"
 version = "0.1.0"
 requires-python = ">=3.10"
 dependencies = [
@@ -15,5 +15,9 @@ dependencies = [
     "uvicorn[standard]",
 ]
 
+[project.scripts]
+stopreason = "modules.stopreason.pipeline:cli"
+
 [tool.setuptools]
-py-modules = ["api", "stopreason"]
+py-modules = ["api"]
+packages = ["modules", "modules.stopreason"]

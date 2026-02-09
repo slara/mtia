@@ -1,14 +1,12 @@
-"""FastAPI prediction service for ml-stopreason."""
+"""MTIA — central ML/AI service."""
 
 import os
 from contextlib import asynccontextmanager
-from typing import Optional
 
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from fastapi import FastAPI
 from sqlalchemy import create_engine
 
-from stopreason import load_model_artifacts, predict_stop_reasons
+from modules.stopreason import load_model_artifacts, router as stopreason_router
 
 
 @asynccontextmanager
@@ -24,38 +22,10 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="Stop Reason Predictor", lifespan=lifespan)
-
-
-class PredictRequest(BaseModel):
-    dev_id: int
-    duration: float = 60.0
-    user_id: Optional[int] = None
-    top_k: int = 3
-    timestamp: Optional[str] = None
+app = FastAPI(title="MTIA - ML/AI Service", lifespan=lifespan)
+app.include_router(stopreason_router)
 
 
 @app.get("/health")
 def health():
-    return {
-        "status": "ok",
-        "model_loaded": app.state.artifacts is not None,
-        "n_classes": app.state.artifacts["metadata"]["n_classes"],
-    }
-
-
-@app.post("/predict")
-def predict(req: PredictRequest):
-    try:
-        result = predict_stop_reasons(
-            engine=app.state.engine,
-            artifacts=app.state.artifacts,
-            dev_id=req.dev_id,
-            duration=req.duration,
-            user_id=req.user_id,
-            top_k=req.top_k,
-            timestamp=req.timestamp,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    return result
+    return {"status": "ok", "service": "mtia"}

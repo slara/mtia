@@ -10,8 +10,8 @@ build/
 .venv/
 
 # ML artifacts
-models/
-data/
+**/models/
+**/data/
 
 # OS/IDE
 .DS_Store
