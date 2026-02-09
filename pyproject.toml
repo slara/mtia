@@ -1,0 +1,19 @@
+[project]
+name = "ml-stopreason"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "click",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary",
+    "pandas>=2.0",
+    "lightgbm",
+    "scikit-learn",
+    "joblib",
+    "pyarrow",
+    "fastapi",
+    "uvicorn[standard]",
+]
+
+[tool.setuptools]
+py-modules = ["api", "stopreason"]
