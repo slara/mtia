@@ -1,31 +1,31 @@
-# MTIA - ML/AI Service
+# MTIA - Servicio ML/AI
 
-Central service for ML/AI tasks. Each capability lives in its own module under `modules/`.
+Servicio central para tareas de ML/AI. Cada funcionalidad vive en su propio módulo dentro de `modules/`.
 
-## Structure
+## Estructura
 
 ```
 mtia/
-├── api.py                          # FastAPI orchestrator (includes module routers)
+├── api.py                          # Orquestador FastAPI (incluye routers de módulos)
 ├── modules/
 │   └── stopreason/
-│       ├── pipeline.py             # ML pipeline (extract, train, predict CLI)
-│       ├── router.py               # FastAPI endpoints (POST /predict, GET /health)
-│       ├── models/cic/             # Trained model artifacts
-│       └── data/                   # Extracted training data
+│       ├── pipeline.py             # Pipeline ML (extract, train, predict CLI)
+│       ├── router.py               # Endpoints FastAPI (POST /predict, GET /health)
+│       ├── models/cic/             # Artefactos del modelo entrenado
+│       └── data/                   # Datos de entrenamiento extraídos
 ├── Dockerfile
 └── pyproject.toml
 ```
 
 ## Endpoints
 
-| Method | Path | Description |
+| Método | Ruta | Descripción |
 |--------|------|-------------|
-| GET | `/health` | Service health check |
-| GET | `/stopreason/health` | Stop-reason module health |
-| POST | `/stopreason/predict` | Predict top-k stop reasons |
+| GET | `/health` | Chequeo de salud del servicio |
+| GET | `/stopreason/health` | Salud del módulo stop-reason |
+| POST | `/stopreason/predict` | Predecir top-k razones de detención |
 
-### Predict request
+### Request de predicción
 
 ```json
 POST /stopreason/predict
@@ -38,20 +38,20 @@ POST /stopreason/predict
 }
 ```
 
-## CLI (stopreason pipeline)
+## CLI (pipeline stopreason)
 
-When a machine stops on the production line, the system predicts the most likely stop reason using a LightGBM classifier trained on historical stop data. The pipeline has three steps: **extract** → **train** → **predict**.
+Cuando una máquina se detiene en la línea de producción, el sistema predice la razón de detención más probable usando un clasificador LightGBM entrenado con datos históricos de detenciones. El pipeline tiene tres pasos: **extract** → **train** → **predict**.
 
 ### Extract
 
-Pulls historical stop events from PostgreSQL (`j_s_reg`, `j_device`, `j_cod_state`, `j_line`) and builds a feature vector per stop event:
+Extrae eventos históricos de detención desde PostgreSQL (`j_s_reg`, `j_device`, `j_cod_state`, `j_line`) y construye un vector de features por cada evento de detención:
 
-- **Temporal:** hour, day of week, month
-- **Device context:** device ID, operator, stop duration
-- **History:** previous 2 stop reasons, time since last stop
-- **Line topology:** position in line, line length, and status of 4 neighbors (2 upstream, 2 downstream) within a 5-minute window
+- **Temporales:** hora, día de la semana, mes
+- **Contexto del dispositivo:** ID del dispositivo, operador, duración de la detención
+- **Historial:** 2 razones de detención anteriores, tiempo desde la última detención
+- **Topología de línea:** posición en la línea, largo de la línea, y estado de 4 vecinos (2 aguas arriba, 2 aguas abajo) en una ventana de 5 minutos
 
-Stop reasons with fewer than `--min-samples` occurrences (default 10) are filtered out. Outputs a Parquet file.
+Las razones de detención con menos de `--min-samples` ocurrencias (por defecto 10) se filtran. Genera un archivo Parquet.
 
 ```bash
 docker compose exec mtia stopreason extract --client-id 31 --output /app/modules/stopreason/data/cic.parquet --verbose
@@ -59,11 +59,11 @@ docker compose exec mtia stopreason extract --client-id 31 --output /app/modules
 
 ### Train
 
-Trains a LightGBM multi-class classifier. Compares two models: device-only (9 features) vs device+line (25 features with neighbor context), and persists the device+line model (better top-3 accuracy).
+Entrena un clasificador LightGBM multi-clase. Compara dos modelos: solo-dispositivo (9 features) vs dispositivo+línea (25 features con contexto de vecinos), y persiste el modelo dispositivo+línea (mejor accuracy top-3).
 
-Saved artifacts: `model.joblib`, `label_encoder.joblib`, `metadata.json`.
+Artefactos guardados: `model.joblib`, `label_encoder.joblib`, `metadata.json`.
 
-CIC results: ~85% top-1, ~95% top-3, ~97% top-5 (69 classes).
+Resultados CIC: ~85% top-1, ~95% top-3, ~97% top-5 (69 clases).
 
 ```bash
 docker compose exec mtia stopreason train --data /app/modules/stopreason/data/cic.parquet --output /app/modules/stopreason/models/cic --verbose
@@ -71,16 +71,16 @@ docker compose exec mtia stopreason train --data /app/modules/stopreason/data/ci
 
 ### Predict
 
-Queries the live database for real-time context (device info, recent stops, neighbor status), assembles the same 25-feature vector used during training, and returns top-k predictions with confidence scores and stop reason descriptions.
+Consulta la base de datos en tiempo real para obtener contexto (info del dispositivo, detenciones recientes, estado de vecinos), arma el mismo vector de 25 features usado durante el entrenamiento, y retorna las top-k predicciones con scores de confianza y descripciones de razones de detención.
 
-Available as both CLI command and `POST /stopreason/predict` endpoint.
+Disponible como comando CLI y como endpoint `POST /stopreason/predict`.
 
 ```bash
 docker compose exec mtia stopreason predict --model-dir /app/modules/stopreason/models/cic --dev-id 1079 --verbose
 ```
 
-## Adding a new module
+## Agregar un nuevo módulo
 
-1. Create `modules/newmodule/` with `__init__.py`, `pipeline.py`, `router.py`
-2. In `api.py`, add: `from modules.newmodule import router` + `app.include_router(router)`
-3. Add `"modules.newmodule"` to `packages` in `pyproject.toml`
+1. Crear `modules/newmodule/` con `__init__.py`, `pipeline.py`, `router.py`
+2. En `api.py`, agregar: `from modules.newmodule import router` + `app.include_router(router)`
+3. Agregar `"modules.newmodule"` a `packages` en `pyproject.toml`
