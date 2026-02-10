@@ -20,11 +20,12 @@ class PredictRequest(BaseModel):
 
 @router.get("/health")
 def health(request: Request):
+    client_models = request.app.state.client_models
     return {
         "status": "ok",
         "module": "stopreason",
-        "model_loaded": request.app.state.artifacts is not None,
-        "n_classes": request.app.state.artifacts["metadata"]["n_classes"],
+        "clients_loaded": sorted(client_models.keys()),
+        "n_clients": len(client_models),
     }
 
 
@@ -33,7 +34,7 @@ def predict(req: PredictRequest, request: Request):
     try:
         result = predict_stop_reasons(
             engine=request.app.state.engine,
-            artifacts=request.app.state.artifacts,
+            client_models=request.app.state.client_models,
             dev_id=req.dev_id,
             duration=req.duration,
             user_id=req.user_id,

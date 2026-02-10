@@ -2,6 +2,7 @@
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from sqlalchemy import create_engine
@@ -11,14 +12,27 @@ from modules.stopreason import load_model_artifacts, router as stopreason_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    model_dir = os.environ["MODEL_DIR"]
+    models_dir = os.environ.get("MODELS_DIR") or os.environ.get("MODEL_DIR")
     database_url = os.environ["DATABASE_URL"]
 
-    app.state.artifacts = load_model_artifacts(model_dir)
     app.state.engine = create_engine(database_url)
 
-    n_classes = app.state.artifacts["metadata"]["n_classes"]
-    print(f"Model loaded: {n_classes} classes from {model_dir}")
+    # Load all client models from subdirectories
+    client_models = {}
+    if not models_dir:
+        raise RuntimeError("Set MODELS_DIR (or MODEL_DIR) environment variable")
+    models_path = Path(models_dir)
+
+    if models_path.is_dir():
+        for subdir in sorted(models_path.iterdir()):
+            if subdir.is_dir() and (subdir / "model.joblib").exists():
+                client_name = subdir.name.lower()
+                client_models[client_name] = load_model_artifacts(str(subdir))
+                n_classes = client_models[client_name]["metadata"]["n_classes"]
+                print(f"Model loaded: {client_name} ({n_classes} classes)")
+
+    app.state.client_models = client_models
+    print(f"Clients loaded: {list(client_models.keys())}")
     yield
 
 

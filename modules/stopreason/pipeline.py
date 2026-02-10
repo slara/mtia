@@ -419,10 +419,12 @@ DEVICE_INFO_SQL = text("""
 SELECT d.id AS dev_id, d.name AS dev_name,
        d.line_id, d.index AS position_in_line,
        l.name AS line_name,
+       c.name AS client_name,
        (SELECT COUNT(*) FROM j_device d2
         WHERE d2.line_id = d.line_id AND d2.visible = 1 AND d2.index IS NOT NULL) AS line_length
 FROM j_device d
 LEFT JOIN j_line l ON d.line_id = l.id
+LEFT JOIN j_client c ON d.client_id = c.id
 WHERE d.id = :dev_id
 """)
 
@@ -484,12 +486,12 @@ def load_model_artifacts(model_dir):
     }
 
 
-def predict_stop_reasons(engine, artifacts, dev_id, duration=60.0, user_id=None, top_k=3, timestamp=None):
+def predict_stop_reasons(engine, client_models, dev_id, duration=60.0, user_id=None, top_k=3, timestamp=None):
     """Predict top-k stop reasons for a device.
 
     Args:
         engine: SQLAlchemy engine.
-        artifacts: Dict from load_model_artifacts().
+        client_models: Dict mapping client name -> artifacts from load_model_artifacts().
         dev_id: Device ID.
         duration: Current stop duration in seconds.
         user_id: Operator user ID (optional).
@@ -497,15 +499,11 @@ def predict_stop_reasons(engine, artifacts, dev_id, duration=60.0, user_id=None,
         timestamp: When the stop started (ISO string or datetime). Defaults to now.
 
     Returns:
-        Dict with keys: device, predictions, context.
+        Dict with keys: device, predictions, context, model_info.
 
     Raises:
         ValueError: If device not found.
     """
-    model = artifacts["model"]
-    le = artifacts["label_encoder"]
-    metadata = artifacts["metadata"]
-    features = metadata["features"]
     if timestamp and isinstance(timestamp, str):
         now = datetime.fromisoformat(timestamp)
     elif timestamp:
@@ -520,6 +518,29 @@ def predict_stop_reasons(engine, artifacts, dev_id, duration=60.0, user_id=None,
             raise ValueError(f"Device {dev_id} not found")
 
         dev_info = dict(dev_row._mapping)
+
+        # Look up client model
+        client_name = (dev_info.get("client_name") or "").lower()
+        artifacts = client_models.get(client_name)
+
+        if not artifacts:
+            return {
+                "device": {
+                    "id": dev_id,
+                    "name": dev_info["dev_name"],
+                    "line": dev_info.get("line_name"),
+                    "line_id": dev_info.get("line_id"),
+                    "position": dev_info.get("position_in_line"),
+                    "line_length": dev_info.get("line_length"),
+                },
+                "predictions": [],
+                "model_info": {"available": False, "client": client_name},
+            }
+
+        model = artifacts["model"]
+        le = artifacts["label_encoder"]
+        metadata = artifacts["metadata"]
+        features = metadata["features"]
 
         # Recent stops for LAG features
         recent = conn.execute(RECENT_STOPS_SQL, {"dev_id": dev_id, "before": now}).fetchall()
@@ -664,10 +685,12 @@ def predict_stop_reasons(engine, artifacts, dev_id, duration=60.0, user_id=None,
 def predict(model_dir, dev_id, duration, user_id, top_k, database_url, verbose):
     """Predict top-k stop reasons for a device."""
     artifacts = load_model_artifacts(model_dir)
+    client_name = Path(model_dir).name.lower()
+    client_models = {client_name: artifacts}
     engine = get_engine(database_url)
 
     try:
-        result = predict_stop_reasons(engine, artifacts, dev_id, duration, user_id, top_k)
+        result = predict_stop_reasons(engine, client_models, dev_id, duration, user_id, top_k)
     except ValueError as e:
         click.echo(f"Error: {e}", err=True)
         sys.exit(1)
@@ -718,7 +741,7 @@ def serve(model_dir, database_url, host, port):
         click.echo("Error: DATABASE_URL not set. Pass --database-url or set the env var.", err=True)
         sys.exit(1)
 
-    os.environ["MODEL_DIR"] = model_dir
+    os.environ["MODELS_DIR"] = str(Path(model_dir).parent)
     os.environ["DATABASE_URL"] = database_url
 
     click.echo(f"Starting prediction server on {host}:{port}")
