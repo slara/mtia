@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from sqlalchemy import create_engine
 
 from modules.stopreason import load_model_artifacts, router as stopreason_router
+from modules.rag.router import router as rag_router
 
 
 @asynccontextmanager
@@ -38,6 +39,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="MTIA - ML/AI Service", lifespan=lifespan)
 app.include_router(stopreason_router)
+app.include_router(rag_router)
 
 
 @app.get("/health")

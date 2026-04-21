@@ -13,6 +13,10 @@ build/
 **/models/
 **/data/
 
+# RAG documents + caches (contain client IP)
+documents/
+.cache/
+
 # OS/IDE
 .DS_Store
 .vscode/

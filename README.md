@@ -84,3 +84,133 @@ docker compose exec mtia stopreason predict --model-dir /app/modules/stopreason/
 1. Crear `modules/newmodule/` con `__init__.py`, `pipeline.py`, `router.py`
 2. En `api.py`, agregar: `from modules.newmodule import router` + `app.include_router(router)`
 3. Agregar `"modules.newmodule"` a `packages` en `pyproject.toml`
+
+---
+
+## Módulo RAG — Documentos por paso de proceso
+
+RAG local que responde preguntas de operadores sobre los manuales de un paso
+productivo en mtworkflows. Todo corre local: Ollama nativo macOS (GPU Metal)
++ Qdrant + mtia + pestaña "Documentos" en el frontend.
+
+### Arquitectura
+
+```
+mtworkflows (Vue) ──JWT── mtia (FastAPI) ──┬── Ollama (host, Metal)  ← embeddings + LLM
+                                           └── Qdrant (docker)       ← vectores por cliente
+```
+
+Modelos por defecto (MacBook Pro M4 24GB):
+
+| Rol         | Modelo            | Memoria aprox. |
+|-------------|-------------------|----------------|
+| LLM         | `gemma4:e4b`      | ~8 GB          |
+| Embeddings  | `bge-m3` (1024d)  | ~1 GB          |
+
+Alternativas: `gemma4:e2b` (más rápido, menos calidad), `gemma4:26b` MoE
+(más calidad, justo en memoria).
+
+### Configuración inicial (una sola vez)
+
+1. **Instalar Ollama nativo** — https://ollama.com/download/mac
+   Ollama corre como servicio launchd en `localhost:11434`.
+
+2. **Descargar modelos** (desde el host, no desde el contenedor):
+   ```bash
+   invoke mtia.pull-models
+   # o manualmente: ollama pull gemma4:e4b bge-m3
+   ```
+
+3. **Levantar el stack RAG** (Qdrant + mtia con las nuevas variables):
+   ```bash
+   invoke mtia.up
+   ```
+
+4. **Verificar salud**:
+   ```bash
+   invoke mtia.health
+   # Debe mostrar OK en mtia, qdrant, ollama, y los dos modelos descargados.
+   ```
+
+### Ingestar un manual
+
+```bash
+invoke mtia.ingest --client cyt --blueprint empaque \
+    --path /ruta/a/manual-empaque.pdf
+```
+
+Esto copia el PDF a `mtia/documents/cyt/empaque/` (gitignored) y lo indexa.
+Re-ingestar el mismo PDF reemplaza los fragmentos anteriores (idempotente).
+
+Para reindexar todo un cliente (borra la colección en Qdrant y reingesta
+desde disco):
+
+```bash
+invoke mtia.reindex --client cyt
+```
+
+### Endpoints HTTP
+
+Todos requieren `Authorization: JWT <token>` con el mismo token que emite
+el servicio `api` (pyramid_jwt, HS512, `JWT_SECRET` compartido vía `.env`).
+El claim `client` del token debe coincidir con el parámetro `client`.
+
+| Método | Ruta                                                | Uso                        |
+|--------|-----------------------------------------------------|----------------------------|
+| GET    | `/rag/documents?client=&blueprint_code=`            | Listar docs de un paso     |
+| POST   | `/rag/ingest` (multipart: client, blueprint_code, file) | Subir e indexar       |
+| DELETE | `/rag/documents?client=&blueprint_code=&source=`    | Borrar doc + vectores      |
+| POST   | `/rag/chat?client=&blueprint_code=&question=&top_k=` | **SSE** stream de respuesta |
+
+El stream de `/rag/chat` emite tres tipos de eventos:
+
+- `citations` — lista `[{source, page, chunk_idx, score}]`, una sola vez al inicio.
+- `token` — `{text: "..."}` por cada chunk del LLM.
+- `done` — `{}` al final.
+
+### Frontend — pestaña "Documentos"
+
+En `mtworkflows`, la pestaña se agrega automáticamente al abrir una orden. El
+`blueprint_code` se deriva del nombre del paso con `slugify()`
+(`composables/useRag.js`): "Control de calidad" → `control_de_calidad`.
+
+El proxy Vite `/mtia/*` → `http://mtia:8008` evita problemas de CORS.
+
+### Umbral de rechazo
+
+Si ningún fragmento supera `MIN_RETRIEVAL_SCORE` (0.30 por defecto, similitud
+coseno en `bge-m3`), el endpoint emite:
+
+> "No encontré información relevante en los documentos."
+
+En lugar de llamar al LLM y arriesgar alucinaciones. Ajustar en
+`modules/rag/router.py` si se valida contra un corpus real.
+
+### Layout en disco
+
+```
+mtia/documents/<client>/<blueprint_code>/<archivo>.pdf
+```
+
+El árbol completo está en `.gitignore` — los documentos contienen IP del cliente.
+
+### Tests
+
+```bash
+docker compose exec mtia python -m pytest modules/rag/tests/
+```
+
+Los tests de `test_ollama.py` se saltean automáticamente si Ollama no está
+corriendo en el host. Los demás usan Qdrant real y Ollama stub.
+
+### Problemas frecuentes
+
+| Síntoma                                              | Causa / solución                                                 |
+|------------------------------------------------------|------------------------------------------------------------------|
+| `invoke mtia.health` → `FAIL ollama`                 | Ollama no está corriendo en el host. `brew services start ollama` |
+| `ollama CLI missing`                                 | Falta instalar Ollama nativo (no corre en Docker — se pierde Metal) |
+| `401 Unauthorized` en `/rag/*`                       | Header `Authorization: JWT <token>` ausente o `JWT_SECRET` distinto entre api y mtia |
+| `403 Forbidden`                                      | El `client` pedido no coincide con el claim `client` del JWT     |
+| Respuesta dice "No encontré información relevante"   | Normal si el corpus no cubre la pregunta. Ajustar threshold o agregar docs |
+| `gemma4:e4b` no responde bien en español técnico     | Probar `gemma4:26b` (ver tabla de modelos arriba) y reindexar no es necesario |
+| Embeddings muy lentos                                | Primera llamada a Ollama carga el modelo (cold start, ~5-10s). Tirar un `ollama run bge-m3` para pre-cargar |
